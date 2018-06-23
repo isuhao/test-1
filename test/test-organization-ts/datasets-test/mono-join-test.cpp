@@ -141,5 +141,56 @@ BOOST_AUTO_TEST_CASE( test_mono_join )
 
 //____________________________________________________________________________//
 
+
+// faire un dataset iterator qui renvoit un objet temporaire.
+
+// this dataset returns on purpose a temporary, and we want to check that the
+// returned elements do not get released before the invocation from the join operation
+// accessor.
+class fake_dataset {
+public:
+    enum { arity = 2 };
+
+    struct iterator {
+        // Constructor
+        explicit    iterator( int value )
+        : m_value(value)
+        {}
+
+        // forward iterator interface
+        // The returned sample should be by value, as the operator* may return a temporary object
+        std::vector<int>       operator*() const   { return std::vector<int>(m_value, m_value); }
+        void         operator++()        { m_value++; }
+      
+        int m_value;
+    };
+
+    fake_dataset( )
+    {}
+
+    //! dataset interface
+    data::size_t    size() const    { return 2; }
+    iterator        begin() const   { return iterator(0); }
+};
+
+namespace boost { namespace unit_test { namespace data { namespace monomorphic {
+template <>
+struct is_dataset<fake_dataset> : mpl::true_ {};
+}}}}
+
+BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
+{
+    copy_count::value() = 0;
+    //data::for_each_sample( ( data::make( fake_dataset() ) ^ data::make( fake_dataset() ) ) +
+    //                       ( data::make( fake_dataset() ) ^ data::make( fake_dataset() ) ),
+    //                         check_arg_type<copy_count>() );
+
+    data::for_each_sample( data::make( fake_dataset() ) + data::make( fake_dataset() ),
+                           check_arg_type<copy_count>() );
+
+
+    BOOST_TEST( copy_count::value() == 0 );
+}
+
 // EOF
 
