@@ -40,10 +40,21 @@ class join {
 
     typedef typename dataset1_decay::iterator       dataset1_iter;
     typedef typename dataset2_decay::iterator       dataset2_iter;
+  
+    using iter1_ret = decltype(*std::declval<DataSet1>().begin());
+    using iter2_ret = decltype(*std::declval<DataSet2>().begin());
+
 public:
     typedef typename dataset1_decay::sample         sample;
 
     enum { arity = dataset1_decay::arity };
+  
+    using sample_t = typename std::conditional<
+        std::is_reference<iter1_ret>::value && std::is_reference<iter2_ret>::value && std::is_same<iter1_ret, iter2_ret>::value,
+        iter1_ret,
+        sample
+        >::type
+        ;
 
     struct iterator {
         // Constructor
@@ -55,7 +66,7 @@ public:
 
         // forward iterator interface
         // The returned sample should be by value, as the operator* may return a temporary object
-        sample       operator*() const   { return m_first_size > 0 ? std::move(*m_it1) : std::move(*m_it2); }
+        sample_t     operator*() const   { return m_first_size > 0 ? *m_it1 : *m_it2; }
         void         operator++()        { if( m_first_size > 0 ) { --m_first_size; ++m_it1; } else ++m_it2; }
 
     private:

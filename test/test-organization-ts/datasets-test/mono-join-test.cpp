@@ -15,6 +15,7 @@
 #include <boost/test/data/monomorphic/singleton.hpp>
 #include <boost/test/data/monomorphic/array.hpp>
 #include <boost/test/data/monomorphic/collection.hpp>
+#include <boost/test/data/monomorphic/fwd.hpp>
 #include <boost/test/data/for_each_sample.hpp>
 namespace data=boost::unit_test::data;
 
@@ -147,49 +148,148 @@ BOOST_AUTO_TEST_CASE( test_mono_join )
 // this dataset returns on purpose a temporary, and we want to check that the
 // returned elements do not get released before the invocation from the join operation
 // accessor.
+
+template <class op_t, class value_t = int>
 class fake_dataset {
 public:
-    enum { arity = 2 };
+    enum { arity = 1 };
+    typedef value_t sample;
 
     struct iterator {
-        // Constructor
-        explicit    iterator( int value )
-        : m_value(value)
+        op_t op_;
+        explicit    iterator( value_t&& value )
+        : m_value(std::forward<value_t>(value))
         {}
 
         // forward iterator interface
         // The returned sample should be by value, as the operator* may return a temporary object
-        std::vector<int>       operator*() const   { return std::vector<int>(m_value, m_value); }
-        void         operator++()        { m_value++; }
+        decltype(std::declval<op_t>()(std::declval<value_t>()))
+        operator*() const {
+          return op_(m_value);
+        }
+        void operator++() {
+          m_value++;
+        }
       
-        int m_value;
+        value_t m_value;
     };
 
-    fake_dataset( )
-    {}
+    //fake_dataset( )
+    //{}
 
     //! dataset interface
     data::size_t    size() const    { return 2; }
-    iterator        begin() const   { return iterator(0); }
+    iterator        begin() const   { return iterator(value_t()); } // default init the class
 };
 
 namespace boost { namespace unit_test { namespace data { namespace monomorphic {
-template <>
-struct is_dataset<fake_dataset> : mpl::true_ {};
+
+template <class op_t, class value_t>
+struct is_dataset< fake_dataset<op_t, value_t> > : mpl::true_ {};
+
 }}}}
+
+struct op_identity {
+
+  template <class T>
+  T const& operator()(T const& r) const {
+      return r;
+  }
+};
+
+struct op_copy {
+  template <class T>
+  T operator()(T const& r) const {
+      return r;
+  }
+};
+
+struct mono_invocation {
+    mono_invocation() : m_value( 0 ) {}
+
+    template<typename S>
+    void    operator()( S const& ) const
+    {
+        m_value++;
+    }
+
+    mutable int    m_value;
+
+private:
+    mono_invocation(mono_invocation const&);
+};
+
+struct mono_check_current_number {
+    mono_check_current_number() : m_value( 0 ) {}
+
+    template<typename S>
+    void    operator()( S const& s) const
+    {
+        assert(s.current_nb_instances > 0);
+        m_value += s.current_nb_instances;
+    }
+
+    mutable int    m_value;
+
+private:
+    mono_check_current_number(mono_check_current_number const&);
+};
+
+struct counted_int {
+  explicit counted_int() : value(0), has_moved(false) {
+      current_nb_instances++;
+  }
+  
+  counted_int(counted_int const& r) : value(r.value), has_moved(false) {
+      current_nb_instances++;
+  }
+
+  counted_int(counted_int && r) : value(r.value), has_moved(false) {
+    r.has_moved = true;
+  }
+  ~counted_int(){
+      if(!has_moved)
+          current_nb_instances--;
+  }
+
+  counted_int& operator++(int){
+      value++;
+      return *this;
+  }
+
+  int value;
+  bool has_moved;
+  static int current_nb_instances;
+};
+int counted_int::current_nb_instances = 0;
+
 
 BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
 {
-    copy_count::value() = 0;
-    //data::for_each_sample( ( data::make( fake_dataset() ) ^ data::make( fake_dataset() ) ) +
-    //                       ( data::make( fake_dataset() ) ^ data::make( fake_dataset() ) ),
-    //                         check_arg_type<copy_count>() );
+    using namespace data;
+    using namespace data::monomorphic;
+    using value_t = int;
+    using op_t = op_identity;
+    using ds_t = fake_dataset<op_t, value_t>;
+  
+    static_assert(boost::unit_test::data::monomorphic::is_dataset<ds_t>::value, "this should be a dataset");
+  
+    mono_invocation ic;
+    data::for_each_sample( data::make( fake_dataset<op_t, value_t>() ) + data::make( fake_dataset<op_t, value_t>() ),
+                           ic );
+  
+    BOOST_TEST(ic.m_value == 4);
+  
+    using ds2_t = fake_dataset<op_copy, counted_int>;
+    mono_check_current_number ic2;
+    data::for_each_sample( data::make( ds2_t() ) + data::make( ds2_t() ),
+                           ic2 );
+  
+    // 2 datasets
+    // (2 + 3) * 4: 4 iterations, 3 copies each
+    BOOST_TEST(ic2.m_value == (2 + 3) * 4);
 
-    data::for_each_sample( data::make( fake_dataset() ) + data::make( fake_dataset() ),
-                           check_arg_type<copy_count>() );
 
-
-    BOOST_TEST( copy_count::value() == 0 );
 }
 
 // EOF
