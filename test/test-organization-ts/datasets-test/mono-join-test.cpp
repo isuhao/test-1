@@ -157,8 +157,12 @@ public:
 
     struct iterator {
         op_t op_;
-        explicit    iterator( value_t&& value )
-        : m_value(std::forward<value_t>(value))
+        iterator( value_t&& value )
+        : m_value(std::move(value))
+        {}
+
+        iterator( value_t const& value )
+        : m_value(value)
         {}
 
         // forward iterator interface
@@ -173,9 +177,6 @@ public:
       
         value_t m_value;
     };
-
-    //fake_dataset( )
-    //{}
 
     //! dataset interface
     data::size_t    size() const    { return 2; }
@@ -200,6 +201,7 @@ struct op_identity {
 struct op_copy {
   template <class T>
   T operator()(T const& r) const {
+      T copy = r; // just some noise for counting
       return r;
   }
 };
@@ -235,6 +237,22 @@ private:
     mono_check_current_number(mono_check_current_number const&);
 };
 
+struct mono_check_current_number_and_reset {
+    mono_check_current_number_and_reset() : m_value( 0 ) {}
+
+    template<typename S>
+    void    operator()( S const& s) const
+    {
+        assert(s.current_nb_instances > 0);
+        m_value += s.current_nb_instances;
+    }
+
+    mutable int    m_value;
+
+private:
+    mono_check_current_number_and_reset(mono_check_current_number const&);
+};
+
 struct counted_int {
   explicit counted_int() : value(0), has_moved(false) {
       current_nb_instances++;
@@ -264,21 +282,52 @@ struct counted_int {
 int counted_int::current_nb_instances = 0;
 
 
+struct counted_int2 {
+  explicit counted_int2() : value(current_nb_instances) {
+  }
+  
+  counted_int2(counted_int2 const& r) : value(r.value) {
+      current_nb_instances++;
+  }
+
+  counted_int2(counted_int2 && r) noexcept : value(r.value) {
+      current_nb_instances++;
+  }
+  ~counted_int2(){
+  }
+
+  counted_int2& operator++(int){
+      value++;
+      return *this;
+  }
+
+  int value;
+  static int current_nb_instances;
+};
+int counted_int2::current_nb_instances = 0;
+
+
+struct op_copy2 {
+  template <class T>
+  T operator()(T r) const {
+      // passing by copy, additional copy
+      return r;
+  }
+};
+
 BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
 {
     using namespace data;
     using namespace data::monomorphic;
-    using value_t = int;
-    using op_t = op_identity;
-    using ds_t = fake_dataset<op_t, value_t>;
+    using ds1_t = fake_dataset<op_identity, int>;
   
-    static_assert(boost::unit_test::data::monomorphic::is_dataset<ds_t>::value, "this should be a dataset");
+    static_assert(boost::unit_test::data::monomorphic::is_dataset<ds1_t>::value, "this should be a dataset");
   
-    mono_invocation ic;
-    data::for_each_sample( data::make( fake_dataset<op_t, value_t>() ) + data::make( fake_dataset<op_t, value_t>() ),
-                           ic );
+    mono_invocation ic1;
+    data::for_each_sample( data::make( ds1_t() ) + data::make( ds1_t() ),
+                           ic1 );
   
-    BOOST_TEST(ic.m_value == 4);
+    BOOST_TEST(ic1.m_value == 4);
   
     using ds2_t = fake_dataset<op_copy, counted_int>;
     mono_check_current_number ic2;
@@ -287,18 +336,138 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
                            ic2 );
   
     // 2 datasets
-    // (2 + 3) * 4: 4 iterations, 3 copies each
-    BOOST_TEST(ic2.m_value == (2 + 3) * 4);
+    // (2 + 3) * 4: 4 iterations, 1 copies each because of the iterator
+    // no other copies are made because of the return copy/move ellision
+    BOOST_TEST(ic2.m_value == (2 + 1) * 4);
 
-    using ds2_t = fake_dataset<op_identity, counted_int>;
+    using ds3_t = fake_dataset<op_identity, counted_int>;
     mono_check_current_number ic3;
     counted_int::current_nb_instances = 0;
-    data::for_each_sample( data::make( ds2_t() ) + data::make( ds2_t() ),
+    data::for_each_sample( data::make( ds3_t() ) + data::make( ds3_t() ),
                            ic3 );
   
     // 2 datasets
-    // (2 + 3) * 4: 4 iterations, 3 copies each
-    BOOST_TEST(ic3.m_value == (2 + 3) * 4);
+    // 2 * 4: 4 iterations, 0 copies each, passing by reference
+    BOOST_TEST(ic3.m_value == 2 * 4);
+  
+    // mixed case, passing by value
+    mono_check_current_number ic4;
+    counted_int::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds3_t() ) + data::make( ds2_t() ),
+                           ic4 );
+  
+    // 2 datasets
+    // 2 * 4: 4 iterations, 0 copies each, passing by reference
+    BOOST_TEST(ic4.m_value == (2 + 1) * 4);
+  
+  
+    // counted_int2 here
+    using ds4_t = fake_dataset<op_copy2, counted_int2>;
+    mono_check_current_number_and_reset ic5;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds4_t() ) + data::make( ds4_t() ),
+                           ic5 );
+  
+    // 2 datasets
+    // 4: 4 iterations, 2 copies/move each.
+    // Initial 4 is created by the move of the rvalue to the iterator, and the move of the iterator, for each ds.
+    BOOST_TEST(ic5.m_value ==
+      (4 + 2) +
+      (4 + 2 + 2) +
+      (4 + 2 + 2 + 2) +
+      (4 + 2 + 2 + 2 + 2)
+    );
+
+    // slightly more complicated, see below for the counting
+    mono_check_current_number_and_reset ic6;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds4_t() ) + data::make( ds4_t() ) + data::make( ds4_t() ),
+                           ic6 );
+  
+    // 3 datasets
+    // 4 for the first pair, then moved: becomes 6
+    // then 2, for the third dataset, becomes 8
+    // then 2 operations per elements
+    BOOST_TEST(ic6.m_value ==
+      (8 + 2) +
+      (8 + 2 + 2) +
+      (8 + 2 + 2 + 2) +
+      (8 + 2 + 2 + 2 + 2) +
+      (8 + 2 + 2 + 2 + 2 + 2) +
+      (8 + 2 + 2 + 2 + 2 + 2 + 2));
+
+    // just to make sure every body understands
+    mono_check_current_number_and_reset ic7;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds4_t() ) + data::make( ds4_t() ) + data::make( ds4_t()) + data::make( ds4_t() ),
+                           ic7 );
+  
+    // 4 datasets
+    // 4 for the first pair, then moved: becomes 6
+    // then 2, for the third dataset, becomes 8, then moved, becomes 11 (3 counted_int2 instances)
+    // then 2 for the 4th dataset, becomes 13
+    // then 2 operations per elements
+    BOOST_TEST(ic7.m_value ==
+      (13 + 2) +
+      (13 + 2 + 2) +
+      (13 + 2 + 2 + 2) +
+      (13 + 2 + 2 + 2 + 2) +
+      (13 + 2 + 2 + 2 + 2 + 2) +
+      (13 + 2 + 2 + 2 + 2 + 2 + 2) +
+      (13 + 2 + 2 + 2 + 2 + 2 + 2 + 2) +
+      (13 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 2)
+    );
+  
+    using ds5_t = fake_dataset<op_identity, counted_int2>;
+    mono_check_current_number_and_reset ic8;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds5_t() ) + data::make( ds5_t() ),
+                           ic8 );
+  
+    // here same initial as ic5, each operation should cost 0 as we return by reference
+    BOOST_TEST(ic8.m_value ==
+      (4 + 0) +
+      (4 + 0 + 0) +
+      (4 + 0 + 0 + 0) +
+      (4 + 0 + 0 + 0 + 0)
+    );
+  
+    // just to make sure
+    mono_check_current_number_and_reset ic9;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds5_t() ) + data::make( ds5_t() ) + data::make( ds5_t() ) + data::make( ds5_t() ),
+                           ic9 );
+  
+    BOOST_TEST(ic9.m_value ==
+      (13 + 0) +
+      (13 + 0 + 0) +
+      (13 + 0 + 0 + 0) +
+      (13 + 0 + 0 + 0 + 0) +
+      (13 + 0 + 0 + 0 + 0 + 0) +
+      (13 + 0 + 0 + 0 + 0 + 0 + 0) +
+      (13 + 0 + 0 + 0 + 0 + 0 + 0 + 0) +
+      (13 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0)
+    );
+
+    // just to make sure, now mixing the third dataset, generates a copy for all samples at the join level
+    // but for ds5, passed by reference, so only one copy.
+    mono_check_current_number_and_reset ic10;
+    counted_int2::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds5_t() ) + data::make( ds5_t() ) + data::make( ds4_t() ) + data::make( ds5_t() ),
+                           ic10 );
+  
+    BOOST_TEST(ic10.m_value ==
+      (13 + 1) +
+      (13 + 1 + 1) +
+      (13 + 1 + 1 + 1) +
+      (13 + 1 + 1 + 1 + 1) +
+      (13 + 1 + 1 + 1 + 1 + 2) + // ds4
+      (13 + 1 + 1 + 1 + 1 + 2 + 2) +
+      (13 + 1 + 1 + 1 + 1 + 2 + 2 + 1) + // ds5 again
+      (13 + 1 + 1 + 1 + 1 + 2 + 2 + 1 + 1)
+    );
+
+
 }
 
 // EOF
