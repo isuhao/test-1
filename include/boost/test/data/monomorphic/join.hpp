@@ -58,7 +58,7 @@ public:
 
     struct iterator {
         // Constructor
-        explicit    iterator( dataset1_iter it1, dataset2_iter it2, data::size_t first_size )
+        explicit    iterator( dataset1_iter&& it1, dataset2_iter&& it2, data::size_t first_size )
         : m_it1( std::move( it1 ) )
         , m_it2( std::move( it2 ) )
         , m_first_size( first_size )

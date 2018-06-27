@@ -290,7 +290,7 @@ struct counted_int2 {
       current_nb_instances++;
   }
 
-  counted_int2(counted_int2 && r) noexcept : value(r.value) {
+  counted_int2(counted_int2 && r) BOOST_NOEXCEPT_OR_NOTHROW : value(r.value) {
       current_nb_instances++;
   }
   ~counted_int2(){
@@ -364,7 +364,16 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
     // counted_int2 here
     using ds4_t = fake_dataset<op_copy2, counted_int2>;
     mono_check_current_number_and_reset ic5;
+
+    // calibration for the join
+    auto join = data::make(ds4_t()) + data::make(ds4_t());
+    auto join_it = join.begin();
     counted_int2::current_nb_instances = 0;
+    auto join_first_copies = *join_it;
+    int join_nb_copies = counted_int2::current_nb_instances;
+
+    counted_int2::current_nb_instances = 0;
+
     data::for_each_sample( data::make( ds4_t() ) + data::make( ds4_t() ),
                            ic5 );
   
@@ -372,10 +381,10 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
     // 4: 4 iterations, 2 copies/move each.
     // Initial 4 is created by the move of the rvalue to the iterator, and the move of the iterator, for each ds.
     BOOST_TEST(ic5.m_value ==
-      (4 + 2) +
-      (4 + 2 + 2) +
-      (4 + 2 + 2 + 2) +
-      (4 + 2 + 2 + 2 + 2)
+      (4 + join_nb_copies) +
+      (4 + join_nb_copies + join_nb_copies) +
+      (4 + join_nb_copies + join_nb_copies + join_nb_copies) +
+      (4 + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies)
     );
 
     // slightly more complicated, see below for the counting
@@ -389,12 +398,12 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
     // then 2, for the third dataset, becomes 8
     // then 2 operations per elements
     BOOST_TEST(ic6.m_value ==
-      (8 + 2) +
-      (8 + 2 + 2) +
-      (8 + 2 + 2 + 2) +
-      (8 + 2 + 2 + 2 + 2) +
-      (8 + 2 + 2 + 2 + 2 + 2) +
-      (8 + 2 + 2 + 2 + 2 + 2 + 2));
+      (8 + join_nb_copies) +
+      (8 + join_nb_copies + join_nb_copies) +
+      (8 + join_nb_copies + join_nb_copies + join_nb_copies) +
+      (8 + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies) +
+      (8 + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies) +
+      (8 + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies + join_nb_copies));
 
     // just to make sure every body understands
     mono_check_current_number_and_reset ic7;
