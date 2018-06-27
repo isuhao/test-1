@@ -282,6 +282,7 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
   
     using ds2_t = fake_dataset<op_copy, counted_int>;
     mono_check_current_number ic2;
+    counted_int::current_nb_instances = 0;
     data::for_each_sample( data::make( ds2_t() ) + data::make( ds2_t() ),
                            ic2 );
   
@@ -289,7 +290,15 @@ BOOST_AUTO_TEST_CASE( test_mono_join_temporary )
     // (2 + 3) * 4: 4 iterations, 3 copies each
     BOOST_TEST(ic2.m_value == (2 + 3) * 4);
 
-
+    using ds2_t = fake_dataset<op_identity, counted_int>;
+    mono_check_current_number ic3;
+    counted_int::current_nb_instances = 0;
+    data::for_each_sample( data::make( ds2_t() ) + data::make( ds2_t() ),
+                           ic3 );
+  
+    // 2 datasets
+    // (2 + 3) * 4: 4 iterations, 3 copies each
+    BOOST_TEST(ic3.m_value == (2 + 3) * 4);
 }
 
 // EOF

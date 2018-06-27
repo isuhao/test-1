@@ -66,7 +66,7 @@ public:
 
         // forward iterator interface
         // The returned sample should be by value, as the operator* may return a temporary object
-        sample_t     operator*() const   { return m_first_size > 0 ? *m_it1 : *m_it2; }
+        sample     operator*() const   { return m_first_size > 0 ? *m_it1 : *m_it2; }
         void         operator++()        { if( m_first_size > 0 ) { --m_first_size; ++m_it1; } else ++m_it2; }
 
     private:
